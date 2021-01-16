@@ -8,8 +8,7 @@ from tensorflow.python.keras.layers import Add, Conv2D, Input, Lambda
 from tensorflow.python.keras.models import Model
 from tensorflow.keras.losses import MeanAbsoluteError
 
-from model import evaluate
-from model.common import normalize, denormalize, pixel_shuffle
+from model.common import normalize, denormalize, pixel_shuffle, resolve, psnr, evaluate
 
 
 class SrGan(tf.keras.Model):
@@ -79,7 +78,7 @@ class SrGan(tf.keras.Model):
     def restore(self):
         if self.checkpoint_manager.latest_checkpoint:
             self.checkpoint.restore(self.checkpoint_manager.latest_checkpoint)
-            print(f'Model restored from checkpoint at step {self.checkpoint.step.numpy()}.')
+            print(f'Model restored from checkpoint at step {self.checkpoint.step}.')
 
     def evaluate(self, dataset):
         return evaluate(self.checkpoint.model, dataset)
@@ -89,7 +88,6 @@ class SrGan(tf.keras.Model):
         lr, hr = images
 
         self.checkpoint.step.assign_add(1)
-        step = self.checkpoint.step
 
         with tf.GradientTape() as tape:
             lr = tf.cast(lr, tf.float32)
@@ -103,19 +101,20 @@ class SrGan(tf.keras.Model):
 
         self.loss_mean(loss_value)
 
-        # if step % self.evaluate_every == tf.Variable(0):
-        #     loss_value = self.loss_mean.result()
-        #     self.loss_mean.reset_states()
-        #
-        #     # Compute PSNR on validation dataset
-        #     psnr_value = self.evaluate(self.valid_ds)
-        #
-        #     duration = time.perf_counter() - self.now
-        #     print(
-        #         f'{step}/{self.steps}: loss = {loss_value.numpy():.3f}, PSNR = {psnr_value.numpy():3f} ({duration:.2f}s)')
-        #
-        #     if psnr_value > self.checkpoint.psnr:
-        #         self.checkpoint.psnr = psnr_value
-        #         self.checkpoint_manager.save()
+        return {"c_loss": loss_value}
 
-        return {"loss": loss_value}
+
+class CustomCallback(tf.keras.callbacks.Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        loss_value = self.model.loss_mean.result()
+        self.model.loss_mean.reset_states()
+
+        psnr_val = evaluate(self.model.checkpoint.model, self.model.valid_ds)
+
+        print(f", loss: {loss_value:.3f}, PSNR: {psnr_val.numpy():.3f}", end='')
+
+        if psnr_val > self.model.checkpoint.psnr:
+            self.model.checkpoint.psnr = psnr_val
+            self.model.checkpoint_manager.save()
+            print(', Saved!!!')
+
